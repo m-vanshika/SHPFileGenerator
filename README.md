@@ -18,3 +18,4 @@ Steps to use the plugin:
 
 3. Click on Create SHP layer button and in some time the SHP layer of the boundary will be generated.
 
+[Note: The ML model used is not very efficient yet, we are working to improvise the algorithm used]
