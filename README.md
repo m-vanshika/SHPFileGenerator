@@ -12,7 +12,7 @@ https://user-images.githubusercontent.com/61660633/201401077-e2e7ab1f-a3f5-4d1e-
 
 Steps to use the plugin:
 
- \t 1.Install and start the plugin in QGIS
+  1.Install and start the plugin in QGIS
 
 2. Select the Image of tiff layer whose boundaries are to be detected and also define the output file location.
 
