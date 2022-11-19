@@ -41,28 +41,37 @@ import cv2
 from matplotlib import pyplot as plt
 import os
 from pathlib import Path
-
+import operator
 import fiona
+import math
+class Point:
+    x=0
+    y=0
+    def __init__(self,x,y):
+        self.x=x;
+        self.y=y;
+    def equal(self,p2):
+        if self.x==p2.x and self.y==p2.y:
+            return True;
+        return False
+    
+    def dist(self,p2):
+        t=math.sqrt(pow(p2.x-self.x,2)+pow(p2.y-self.y,2))
+        return t
 class ShpFileGenerator:
     """QGIS Plugin Implementation."""
     currentFile=''
     layerList=[]
     l=[]
+    stL=[]
+    hMap=[]
     modelPath=r'C:\Users\hp\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins\shpfilegenerator\classifier.tflite'
 
     finalPath=''
-    seed=24
 
-    batch_size= 16
-    n_classes=4
     BACKBONE = 'resnet34'
     img_height = 256
     img_width  = 256
-    img_channels =3
-
-    IMG_HEIGHT = 256
-    IMG_WIDTH  = 256
-    IMG_CHANNELS =3
     def __init__(self, iface):
         """Constructor.
 
@@ -198,7 +207,13 @@ class ShpFileGenerator:
         # will be set False in run()
         self.first_start = True
 
-
+    def image_resize(self,image_path): 
+        img=cv2.imread(image_path,1)
+        img=cv2.resize(img,(256,256))
+        plt.imsave(self.finalPath+'resize.png',img)
+        vlayer = QgsRasterLayer(self.finalPath+'resize.png', "ResizedLayer")
+        QgsProject.instance().addMapLayer(vlayer)
+        
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
         for action in self.actions:
@@ -208,22 +223,18 @@ class ShpFileGenerator:
     def load_image(self,img_path):
     	img = image.load_img(img_path, target_size=(self.img_height, self.img_width))
     	img_tensor = image.img_to_array(img)                    # (height, width, channels)
-    	#img_tensor = np.expand_dims(img_tensor, axis=0)         # (1, height, width, channels), add a dimension because the model expects this shape: (batch_size, height, width, channels)
     	img_tensor /= 255.                                      # imshow expects values in the range [0, 1]
     	return img_tensor
     def on_layer_changed(self, value):
     	self.currentFile=self.layersList[value]	
 
 
-    def create_model(self):
-        model = sm.Unet(self.BACKBONE, encoder_weights='imagenet', input_shape=(self.IMG_HEIGHT, self.IMG_WIDTH, self.IMG_CHANNELS),classes=self.n_classes, activation='softmax')
-        model.compile('Adam', loss=sm.losses.categorical_focal_jaccard_loss, metrics=[sm.metrics.iou_score])
-        return model
+    
     def createSHP(self):
         if(self.dlg.lineEdit.text()==''or self.dlg.lineEdit.text()=='Select output adress'):
             self.dlg.lineEdit.setText('Select output adress')
             return
-        
+        self.image_resize(self.currentFile.dataProvider().dataSourceUri())
         interpreter=tf.lite.Interpreter(model_path=self.modelPath)
         interpreter.allocate_tensors()
         input_details=interpreter.get_input_details()
@@ -234,30 +245,72 @@ class ShpFileGenerator:
         output_data=interpreter.get_tensor(output_details[0]['index'])
         pred = np.argmax(output_data, axis=3)
         output=pred[0]
-        h_flip = cv2.flip(pred[0], 0)
+        #h_flip = cv2.flip(pred[0], 0)
+        h_flip=pred[0]
         plt.imsave(self.finalPath+'boundary.jpg',h_flip)
         img=cv2.imread(self.finalPath+'boundary.jpg',1)
         edges=cv2.Canny(img,100,200)
 
         plt.imsave(self.finalPath+'edges.jpg',edges)
+
         lines=cv2.HoughLinesP(image=edges,lines=np.array([]),rho=1,theta=np.pi/180,threshold=2,minLineLength=0,maxLineGap=0)
+        
+        for i in lines:
+            p1=Point(i[0][0],i[0][1])
+            p2=Point(i[0][2],i[0][3])
+            self.hMap.append(p1)
+            if(p1.equal(p2)):
+                continue
+            self.hMap.append(p2)
+            line=[]
+            line.append(p1)
+            line.append(p2)
+            self.stL.append(line)
+
+        self.hMap.sort(key=lambda x: (x.x, x.y))
+        for i in self.hMap:
+            minD=10
+            min=i
+            for j in self.hMap:
+                if(i==j):
+                    break
+                d=i.dist(j)
+                if(d<=minD):
+                    flag=True
+                    for s in self.stL:
+                        if(s[0].equal(i) and s[1].equal(j)):
+                            flag=False;
+                            break
+                        elif(s[1].equal(i) and s[0].equal(j)):
+                            flag=False;
+                            break
+                    if flag:
+                        minD=d
+                        min=j
+               
+            if minD!=10:
+                line=[]
+                line.append(i)
+                line.append(min)
+                self.stL.append(line)
+
+
+
         i=0
-        for points in lines:
+        for points in self.stL:
             list=[]
+
             k=[]
-            k.append(points[0][0])
-            k.append(points[0][1])
+            k.append(points[0].x)
+            k.append(points[0].y)
             a=tuple(k)
             list.append(a)
             k=[]
-            k.append(points[0][2])
-            k.append(points[0][3])
+            k.append(points[1].x)
+            k.append(points[1].y)
             a=tuple(k)
             list.append(a)
-            schema = {
-    'geometry':'LineString',
-    'properties':[('Name','int')]
-}
+            schema = {'geometry':'LineString','properties':[('Name','int')]}
             mode='a'
             shpFile=Path(self.finalPath+'shpFile.shp')
             if(shpFile.is_file()==False):
@@ -265,13 +318,7 @@ class ShpFileGenerator:
             lineShp=fiona.open(self.finalPath+'shpFile.shp',mode= mode,crs='EPSG:4326',driver='ESRI Shapefile', schema=schema)
             rowName='line'+(str)(i)
             i+=1
-            self.dlg.label.setText(rowName)
-            rowDict = {
-'geometry' : {'type':'LineString',
-                 'coordinates': list},
-                 'id':i,
-'properties': {'Name' : i},
-}
+            rowDict = {'geometry' : {'type':'LineString','coordinates': list},'id':i,'properties': {'Name' : i},}
             lineShp.write(rowDict)
             lineShp.close()
         vlayer = QgsVectorLayer(self.finalPath+'shpFile.shp', "SHP_layer", "ogr")
@@ -293,7 +340,6 @@ class ShpFileGenerator:
             self.first_start = False
             self.dlg = ShpFileGeneratorDialog()
         self.dlg.pushButton.clicked.connect(self.select_output_file)
-        self.dlg.label.setText('select the file')
         layers=self.iface.mapCanvas().layers()
         self.l=[]
         self.layersList=[]
