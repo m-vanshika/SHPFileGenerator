@@ -245,8 +245,7 @@ class ShpFileGenerator:
         output_data=interpreter.get_tensor(output_details[0]['index'])
         pred = np.argmax(output_data, axis=3)
         output=pred[0]
-        #h_flip = cv2.flip(pred[0], 0)
-        h_flip=pred[0]
+        h_flip = cv2.flip(pred[0], 0)
         plt.imsave(self.finalPath+'boundary.jpg',h_flip)
         img=cv2.imread(self.finalPath+'boundary.jpg',1)
         edges=cv2.Canny(img,100,200)
